@@ -1,7 +1,7 @@
 import numpy as np
 from sklearn.model_selection import train_test_split
 # from pprint import pprint
-import math
+import copy
 
 #1. Consume Data and Stratify
 
@@ -51,6 +51,8 @@ PSS_LABEL = "Perceived_Stress_Score"
 
 cpt_to_feature = dict() # maybe panda dfs to generate cpts
 feature_to_values = []
+
+cpt_to_feature_with_best_alpha = dict()
 
 best_alpha = float('-inf')
 best_alpha_score = float('-inf')
@@ -186,5 +188,61 @@ for alpha in alphas:
     if (f1_avg > best_alpha_score):
         best_alpha = alpha
         best_alpha_score = f1_avg
+        cpt_to_feature_with_best_alpha = copy.deepcopy(cpt_to_feature)
 
 print(f"Best alpha and alpha score is {best_alpha} with score {best_alpha_score}")
+
+
+
+#Last step: Run cpts on test data
+
+stress_to_precision_recall_stuff = {
+    'Low': {TP: 0, TN: 0, FP: 0, FN: 0},
+    'Medium Low': {TP: 0, TN: 0, FP: 0, FN: 0},
+    'Medium High': {TP: 0, TN: 0, FP: 0, FN: 0},
+    'High': {TP: 0, TN: 0, FP: 0, FN: 0},
+
+}
+
+
+for row in test_df:
+    best_score = float('-inf')
+    best_stress_value = ''
+    for j in range(len(stress_values)):
+        stress_value = stress_values[j]
+
+        sum_total = 0.0
+        for i in range(len(labels)):
+            label = labels[i]
+            label_value = row[label]
+            k = findValueIndex(i, label_value)
+            sum_total += np.log(cpt_to_feature[label][k, j])
+
+        sum_total += np.log(stress_to_prior[stress_value])
+
+        if sum_total > best_score:
+            best_score = sum_total
+            best_stress_value = stress_value
+
+    actual_stress_value = row[PSS_LABEL]
+    predicted_stress_value = best_stress_value
+
+    if actual_stress_value == predicted_stress_value:
+        stress_to_precision_recall_stuff[actual_stress_value][TP] += 1
+        stress_to_precision_recall_stuff[predicted_stress_value][TN] += 1
+    else:
+        stress_to_precision_recall_stuff[actual_stress_value][FP] += 1
+        stress_to_precision_recall_stuff[predicted_stress_value][FN] += 1
+
+    for label in stress_values:
+        if label != actual_stress_value and label != predicted_stress_value:
+            stress_to_precision_recall_stuff[label][TN] += 1
+
+
+f1_total = 0
+for label in stress_values:
+    f1_total += calculate_f1(label)
+
+f1_avg = f1_total / 4
+
+print(f"Final f1 value on test data: {f1_avg}")
