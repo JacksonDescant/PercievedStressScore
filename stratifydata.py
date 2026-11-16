@@ -2,10 +2,14 @@ import numpy as np
 from sklearn.model_selection import train_test_split
 # from pprint import pprint
 import copy
+import sys
 
 #1. Consume Data and Stratify
+# Usage: python stratifydata.py [csv]   (equal_width_data.csv, equal_frequency_data.csv, ...)
+DATA_CSV = sys.argv[1] if len(sys.argv) > 1 else "no_nan_data.csv"
+print(f"Using {DATA_CSV}")
 
-data = np.genfromtxt("no_nan_data.csv", delimiter=',', dtype=None, encoding='utf-8', names=True)
+data = np.genfromtxt(DATA_CSV, delimiter=',', dtype=None, encoding='utf-8', names=True)
 labels = ['Age', 'Gender', 'Academic_Level', 'Primary_Platform', 'Daily_Usage_Hours', 'Device_Type', 'Late_Night_Usage']
 
 train_df, temp_df = train_test_split(
@@ -216,7 +220,7 @@ for row in test_df:
             label = labels[i]
             label_value = row[label]
             k = findValueIndex(i, label_value)
-            sum_total += np.log(cpt_to_feature[label][k, j])
+            sum_total += np.log(cpt_to_feature_with_best_alpha[label][k, j])
 
         sum_total += np.log(stress_to_prior[stress_value])
 
