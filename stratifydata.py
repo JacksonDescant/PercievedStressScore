@@ -1,252 +1,129 @@
 import numpy as np
 from sklearn.model_selection import train_test_split
-# from pprint import pprint
-import copy
-import sys
 
-#1. Consume Data and Stratify
-# Usage: python stratifydata.py [csv]   (equal_width_data.csv, equal_frequency_data.csv, ...)
-DATA_CSV = sys.argv[1] if len(sys.argv) > 1 else "no_nan_data.csv"
-print(f"Using {DATA_CSV}")
+DATA_PATH = "no_nan_data.csv"
+TARGET = "Perceived_Stress_Score"
+FEATURES = ["Age", "Gender", "Academic_Level", "Primary_Platform", "Daily_Usage_Hours", "Device_Type", "Late_Night_Usage"]
+STRESS_VALUES = ["Low", "Medium Low", "Medium High", "High"]
 
-data = np.genfromtxt(DATA_CSV, delimiter=',', dtype=None, encoding='utf-8', names=True)
-labels = ['Age', 'Gender', 'Academic_Level', 'Primary_Platform', 'Daily_Usage_Hours', 'Device_Type', 'Late_Night_Usage']
+def split_data(path: str=DATA_PATH, seed: int=42) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Creates 70/15/15 stratified split from CSV path
 
-train_df, temp_df = train_test_split(
-    data,
-    test_size=0.30,
-    stratify=data["Perceived_Stress_Score"],
-    random_state=42
-)
+    Args:
+        path (str, optional): CSV Path. Defaults to DATA_PATH.
+        seed (int, optional): Seed to use. Defaults to 42.
 
-# Step 2: Split remaining 30% equally
-# into validation (15%) and testing (15%)
-val_df, test_df = train_test_split(
-    temp_df,
-    test_size=0.50,
-    stratify=temp_df["Perceived_Stress_Score"],
-    random_state=42
-)
+    Returns:
+        tuple[np.ndarray, np.ndarray, np.ndarray]: Training, Validation, and Testing Data Frames
+    """
+    data = np.genfromtxt(path, delimiter=',', dtype=None, encoding='utf-8', names=True)
+    train_df, temp_df = train_test_split(
+        data,
+        test_size=0.30,
+        stratify=data[TARGET],
+        random_state=seed
+    )
+    
+    val_df, test_df = train_test_split(
+        temp_df,
+        test_size=0.50,
+        stratify=temp_df[TARGET],
+        random_state=seed
+    ) 
+    
+    return train_df, val_df, test_df
 
-print("Training:", len(train_df) / len(data))
-print("Validation:", len(val_df) / len(data))
-print("Testing:", len(test_df) / len(data))
+def fit(data: np.ndarray, alpha: float) -> tuple[np.ndarray, dict[str, np.ndarray], dict[str, dict[str, int]]]:
+    """Uses [method] to determine CPTs. Applies laplace smoothing with alpha.
 
-# verify low med high distributions
-# 
-for name, df in [('train', train_df), ('val', val_df), ('test', test_df)]:
-    for cat in ['Low', 'Medium Low', 'Medium High', 'High']:
-        res = np.count_nonzero(df['Perceived_Stress_Score'] == cat)
+    Args:
+        data (np.ndarray): Training data
+        alpha (float): Laplace smoothing parameter
+
+    Returns:
+        tuple[np.ndarray, dict[str, np.ndarray], dict[str, dict[str, int]]]: A tuple containing the priors, CPTs, and value indices.
+    """
+    
+    # P(Stress = Low/MedLow/MedHigh/High)
+    class_counts = np.array([np.count_nonzero(data[TARGET] == val) for val in STRESS_VALUES])
+    priors = class_counts / class_counts.sum()
+    
+    # P(Feature = value | Stress = stress_val)
+    cpts, value_index = {}, {}
+    for feature in FEATURES:
+        values = np.unique(data[feature])
+        value_index[feature] = {val: i for i, val in enumerate(values)}
+        table = np.zeros((len(values), len(STRESS_VALUES)))
         
-        print(f'{name} + {cat} + {res / len(df) * 100}')
+        for i, feat_val in enumerate(values):
+            for j, stress_val in enumerate(STRESS_VALUES):
+                count = np.count_nonzero((data[feature] == feat_val) & (data[TARGET] == stress_val))
+                count += alpha
+                table[i, j] = count / (class_counts[j] + alpha * len(values))
 
-#2. col = low, medium high, row = features
-# X | y
-# P(Age = 'Teen' | Stress = Low) = count(Age = 'teen' & Stress = Low) / count (Stress = low)
-print(np.count_nonzero((train_df['Age'] == 'Teen') & (train_df['Perceived_Stress_Score'] == "Low")))
-Low_Stress_Count = np.count_nonzero(train_df['Perceived_Stress_Score'] == "Low")
-Med_Low_Stress_Count = np.count_nonzero(train_df['Perceived_Stress_Score'] == "Medium Low")
-Med_High_Stress_Count = np.count_nonzero(train_df['Perceived_Stress_Score'] == "Medium High")
-High_Stress_Count = np.count_nonzero(train_df['Perceived_Stress_Score'] == "High")
+        cpts[feature] = table
 
-stress_counts = {"Low": Low_Stress_Count, "Medium Low": Med_Low_Stress_Count, "Medium High": Med_High_Stress_Count, "High": High_Stress_Count}
-stress_values = ["Low", "Medium Low", "Medium High", "High"]
-PSS_LABEL = "Perceived_Stress_Score"
+    return priors, cpts, value_index
 
-cpt_to_feature = dict() # maybe panda dfs to generate cpts
-feature_to_values = []
-
-cpt_to_feature_with_best_alpha = dict()
-
-best_alpha = float('-inf')
-best_alpha_score = float('-inf')
-# alphas = [.1, .5, 1, 5, 10, 15, 20, 30]
-alphas = []
-i = 10.0
-while i < 17:
-    alphas.append(i)
-    i += 0.1
-
-for alpha in alphas:
-
-    for i in range(len(labels)):
-        label = labels[i]
-        cats = np.unique(train_df[label])
-        feature_to_values.append(cats)
-        #Get count where label = cat & stress = stress value
-        # P(label = cat | stress_level = stress_value)
-        cpt_to_feature[label] = np.zeros((len(cats), len(stress_values))) # num of categories x num stress values
-        for k, cat in enumerate(cats):
-            for j in range(len(stress_values)):
-                stress_value = stress_values[j]
-                num = np.count_nonzero((train_df[label] == cat) & (train_df[PSS_LABEL] == stress_value)) + alpha
-                cpt = num / (stress_counts[stress_value] + alpha * len(cats))
-
-                # print(f'{label}, {cat}, {stress_value}: {cpt}')
-                cpt_to_feature[label][k, j] = cpt
-
-    # pprint(cpt_to_feature)
-    # for k in cpt_to_feature:
-    #     # print(k)
-    #     # print(cpt_to_feature[k])
-
-    # P(Y = y)
-    stress_to_prior = dict()
-    total = 0
-    for label in stress_counts:
-        stress_to_prior[label] = stress_counts[label]
-        total += stress_counts[label]
+def predict(model, row):
+    """Predict using [method]
+    """
+    priors, cpts, value_index = model
+    scores = np.log(priors).copy()
+    
+    for feature in FEATURES:
+        i = value_index[feature][row[feature]]
+        scores += np.log(cpts[feature][i])
         
-    for label in stress_counts:
-        stress_to_prior[label] /= total
+    return STRESS_VALUES[np.argmax(scores)]
 
-
-    #3. Validation set testing
-
-
-    #Calculate f1_scores for each stress level
-    # 2 * (precision x recall) / (precision + recall)
-    # P(stress | column) = 
-    # argmax_y = log (P(Y = y) * (prod i to N P(X_i=x_i | Y = y))
-    # argmax_y = log(P(Y=y)) + sum from i to N log(P(X_i=x_i | Y=y))
-    # Given a row consisting of features X_1,...,X_n, predict the stress level
-
-    def findValueIndex(featureIndex, label_value):
-        possible_values = feature_to_values[featureIndex]
-        for k in range(len(possible_values)):
-            if possible_values[k] == label_value:
-                return k
-
-    TP = 'TP'
-    TN = 'TN'
-    FP = 'FP'
-    FN = 'FN'
-    stress_to_precision_recall_stuff = {
-        'Low': {TP: 0, TN: 0, FP: 0, FN: 0},
-        'Medium Low': {TP: 0, TN: 0, FP: 0, FN: 0},
-        'Medium High': {TP: 0, TN: 0, FP: 0, FN: 0},
-        'High': {TP: 0, TN: 0, FP: 0, FN: 0},
-
-    }
-
-    for row in val_df:
-        best_score = float('-inf')
-        best_stress_value = ''
-        for j in range(len(stress_values)):
-            stress_value = stress_values[j]
-
-            sum_total = 0.0
-            for i in range(len(labels)):
-                label = labels[i]
-                label_value = row[label]
-                k = findValueIndex(i, label_value)
-                sum_total += np.log(cpt_to_feature[label][k, j])
-
-            sum_total += np.log(stress_to_prior[stress_value])
-
-            if sum_total > best_score:
-                best_score = sum_total
-                best_stress_value = stress_value
-
-        actual_stress_value = row[PSS_LABEL]
-        predicted_stress_value = best_stress_value
-
-        if actual_stress_value == predicted_stress_value:
-            stress_to_precision_recall_stuff[actual_stress_value][TP] += 1
-            stress_to_precision_recall_stuff[predicted_stress_value][TN] += 1
+def macro_f1(model, df):
+    """Calculate multi-class F1 given data + model
+    """
+    tp = dict.fromkeys(STRESS_VALUES, 0)
+    fp = dict.fromkeys(STRESS_VALUES, 0)
+    fn = dict.fromkeys(STRESS_VALUES, 0)
+    
+    # Count TP, FP, FN for each class
+    for row in df:
+        actual, pred = row[TARGET], predict(model, row)
+        if actual == pred:
+            tp[actual] += 1
         else:
-            stress_to_precision_recall_stuff[actual_stress_value][FP] += 1
-            stress_to_precision_recall_stuff[predicted_stress_value][FN] += 1
+            fp[pred] += 1
+            fn[actual] += 1
 
-        for label in stress_values:
-            if label != actual_stress_value and label != predicted_stress_value:
-                stress_to_precision_recall_stuff[label][TN] += 1
+    f1s = [2 * tp[y] / d if (d := 2 * tp[y] + fp[y] + fn[y]) else 0 for y in STRESS_VALUES]
+    return np.mean(f1s)
 
-        
-        # best_stress_value == actual_stress_value
-        # -> if its correct, actual_stress_value tp + 1, others tn + 1
-        # prediction: Low, Actual: Low -> [Low][TP] += 1, [Other][TN] += 1
-        # prediction: Low, Actual: High -> [Low][FP] += 1, [High][FN] += 1, [Other][TN] += 1
+def tune_alpha(train, val, alphas):
+    """Hyperparameter tuner for Laplace smoothing parameter alpha.
+    """
+    results = [(macro_f1(fit(train, alpha), val), alpha) for alpha in alphas]
+    best_f1, best_alpha = max(results)
+    return best_alpha, best_f1
 
-        # # tp, tn, fp, fn
-        # if best_stress_value == 
-    # print(stress_to_precision_recall_stuff)
+def main():
+    """Main data loop
+    """
 
-    #Calculate F1 Scores
-    def calculate_f1(category):
-        stress_info = stress_to_precision_recall_stuff[category]
-        # precision = stress_info[TP] / (stress_info[TP] + stress_info[FP])
-        # recall = stress_info[TP] / (stress_info[TP] + stress_info[FN])
+    train_df, val_df, test_df = split_data()
+    data_len = len(train_df) + len(val_df) + len(test_df)
+    print("Split percentages:")
+    print(f"\tTraining: {len(train_df)/data_len*100:.2f}%")
+    print(f"\tValidation: {len(val_df)/data_len*100:.2f}%")
+    print(f"\tTesting: {len(test_df)/data_len*100:.2f}%")
+    
+    best_alpha, val_f1 = tune_alpha(train_df, val_df, alphas=np.arange(10.0, 17.0, 0.1))
+    print(f"Best alpha: {best_alpha}, Validation F1: {val_f1}")
 
-        # return 2 * (precision * recall) / (precision + recall)
-        denominator = 2 * stress_info[TP] + stress_info[FP] + stress_info[FN]
-        f1 = 2 * stress_info[TP] / denominator if denominator > 0 else 0
-        return f1
+    # Use the best alpha to train the final model
+    final_priors, final_cpts, final_value_index = fit(train_df, best_alpha)
 
-    f1_total = 0
-    for label in stress_values:
-        f1_total += calculate_f1(label)
-
-    f1_avg = f1_total / 4
-    print(alpha, f1_avg)
-    if (f1_avg > best_alpha_score):
-        best_alpha = alpha
-        best_alpha_score = f1_avg
-        cpt_to_feature_with_best_alpha = copy.deepcopy(cpt_to_feature)
-
-print(f"Best alpha and alpha score is {best_alpha} with score {best_alpha_score}")
+    # Evaluate on the test set
+    test_f1 = macro_f1((final_priors, final_cpts, final_value_index), test_df)
+    print(f"Test F1: {test_f1}")
 
 
-
-#Last step: Run cpts on test data
-
-stress_to_precision_recall_stuff = {
-    'Low': {TP: 0, TN: 0, FP: 0, FN: 0},
-    'Medium Low': {TP: 0, TN: 0, FP: 0, FN: 0},
-    'Medium High': {TP: 0, TN: 0, FP: 0, FN: 0},
-    'High': {TP: 0, TN: 0, FP: 0, FN: 0},
-
-}
-
-
-for row in test_df:
-    best_score = float('-inf')
-    best_stress_value = ''
-    for j in range(len(stress_values)):
-        stress_value = stress_values[j]
-
-        sum_total = 0.0
-        for i in range(len(labels)):
-            label = labels[i]
-            label_value = row[label]
-            k = findValueIndex(i, label_value)
-            sum_total += np.log(cpt_to_feature_with_best_alpha[label][k, j])
-
-        sum_total += np.log(stress_to_prior[stress_value])
-
-        if sum_total > best_score:
-            best_score = sum_total
-            best_stress_value = stress_value
-
-    actual_stress_value = row[PSS_LABEL]
-    predicted_stress_value = best_stress_value
-
-    if actual_stress_value == predicted_stress_value:
-        stress_to_precision_recall_stuff[actual_stress_value][TP] += 1
-        stress_to_precision_recall_stuff[predicted_stress_value][TN] += 1
-    else:
-        stress_to_precision_recall_stuff[actual_stress_value][FP] += 1
-        stress_to_precision_recall_stuff[predicted_stress_value][FN] += 1
-
-    for label in stress_values:
-        if label != actual_stress_value and label != predicted_stress_value:
-            stress_to_precision_recall_stuff[label][TN] += 1
-
-
-f1_total = 0
-for label in stress_values:
-    f1_total += calculate_f1(label)
-
-f1_avg = f1_total / 4
-
-print(f"Final f1 value on test data: {f1_avg}")
+if __name__ == "__main__":
+    main()
