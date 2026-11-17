@@ -108,7 +108,7 @@ def macro_f1(df: pd.DataFrame, pred: pd.DataFrame) -> float:
     
     denom = 2 * tp + fp + fn
     f1 = np.divide(2 * tp, denom, out=np.zeros(len(tp)), where=denom > 0)
-    return f1.mean()
+    return f1.mean(), tp, fp, fn
 
 def get_accuracy(df: pd.DataFrame, pred: pd.DataFrame) -> float:
     """Calculate accuracy"""
@@ -122,7 +122,7 @@ def tune_alpha(train: pd.DataFrame, val: pd.DataFrame, alphas: Iterable[float]) 
         model = fit(train, alpha)
         pred = predict(model, val)
         acc = get_accuracy(val, pred)
-        f1 = macro_f1(val, pred)
+        f1, _, _, _ = macro_f1(val, pred)
         results.append((f1, alpha, acc))
 
     print(sorted(results))
@@ -150,10 +150,11 @@ def main() -> None:
 
     # Evaluate on the test set
     pred = predict(final_model, test_df)
-    test_f1 = macro_f1(test_df, pred)
+    test_f1, tp, fp, fn = macro_f1(test_df, pred)
     test_acc = get_accuracy(test_df, pred)
     print(f"Test F1: {test_f1}")
     print(f"Test Acc: {test_acc}")
+    print(f"True Positives: {tp}\nFalse Positives: {fp}\nFalse Negatives: {fn}")
 
 
 if __name__ == "__main__":
