@@ -69,8 +69,8 @@ Daily_Usage_Hours = np.select(usage_conditons, usage_labels, default='unknown')
 
 stress_conditions = [
     Perceived_Stress_Score < 10,
-    (Perceived_Stress_Score) >= 10 & (Perceived_Stress_Score < 20),
-    (Perceived_Stress_Score) >= 20 & (Perceived_Stress_Score < 30),
+    (Perceived_Stress_Score >= 10) & (Perceived_Stress_Score < 20),
+    (Perceived_Stress_Score >= 20) & (Perceived_Stress_Score < 30),
     Perceived_Stress_Score >= 30
 ]
 stress_labels = ['Low', 'Medium Low', 'Medium High', 'High']

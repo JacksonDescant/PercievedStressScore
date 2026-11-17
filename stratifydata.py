@@ -1,4 +1,7 @@
+from collections.abc import Iterable
+
 import numpy as np
+import pandas as pd
 from sklearn.model_selection import train_test_split
 
 DATA_PATH = "no_nan_data.csv"
@@ -6,7 +9,10 @@ TARGET = "Perceived_Stress_Score"
 FEATURES = ["Age", "Gender", "Academic_Level", "Primary_Platform", "Daily_Usage_Hours", "Device_Type", "Late_Night_Usage"]
 STRESS_VALUES = ["Low", "Medium Low", "Medium High", "High"]
 
-def split_data(path: str=DATA_PATH, seed: int=42) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+# Model type: tuple of (priors, cpts)
+Model = tuple[pd.Series, dict[str, pd.DataFrame]]
+
+def split_data(path: str = DATA_PATH, seed: int = 42) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Creates 70/15/15 stratified split from CSV path
 
     Args:
@@ -14,9 +20,9 @@ def split_data(path: str=DATA_PATH, seed: int=42) -> tuple[np.ndarray, np.ndarra
         seed (int, optional): Seed to use. Defaults to 42.
 
     Returns:
-        tuple[np.ndarray, np.ndarray, np.ndarray]: Training, Validation, and Testing Data Frames
+        tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]: Training, Validation, and Testing DataFrames
     """
-    data = np.genfromtxt(path, delimiter=',', dtype=None, encoding='utf-8', names=True)
+    data = pd.read_csv(path, index_col="Student_ID")
     train_df, temp_df = train_test_split(
         data,
         test_size=0.30,
@@ -33,77 +39,77 @@ def split_data(path: str=DATA_PATH, seed: int=42) -> tuple[np.ndarray, np.ndarra
     
     return train_df, val_df, test_df
 
-def fit(data: np.ndarray, alpha: float) -> tuple[np.ndarray, dict[str, np.ndarray], dict[str, dict[str, int]]]:
+def fit(data: pd.DataFrame, alpha: float) -> Model:
     """Uses [method] to determine CPTs. Applies laplace smoothing with alpha.
 
     Args:
-        data (np.ndarray): Training data
+        data (pd.DataFrame): Training data
         alpha (float): Laplace smoothing parameter
 
     Returns:
-        tuple[np.ndarray, dict[str, np.ndarray], dict[str, dict[str, int]]]: A tuple containing the priors, CPTs, and value indices.
+        Model: A tuple containing the priors (pd.Series) and CPTs (dict of feature -> pd.DataFrame).
     """
     
     # P(Stress = Low/MedLow/MedHigh/High)
-    class_counts = np.array([np.count_nonzero(data[TARGET] == val) for val in STRESS_VALUES])
+    class_counts = data[TARGET].value_counts().reindex(STRESS_VALUES, fill_value=0)
     priors = class_counts / class_counts.sum()
     
     # P(Feature = value | Stress = stress_val)
-    cpts, value_index = {}, {}
+    cpts = {}
     for feature in FEATURES:
-        values = np.unique(data[feature])
-        value_index[feature] = {val: i for i, val in enumerate(values)}
-        table = np.zeros((len(values), len(STRESS_VALUES)))
-        
-        for i, feat_val in enumerate(values):
-            for j, stress_val in enumerate(STRESS_VALUES):
-                count = np.count_nonzero((data[feature] == feat_val) & (data[TARGET] == stress_val))
-                count += alpha
-                table[i, j] = count / (class_counts[j] + alpha * len(values))
+        counts = pd.crosstab(data[feature], data[TARGET]).reindex(columns=STRESS_VALUES, fill_value=0)
+        cpts[feature] = (counts + alpha) / (class_counts + alpha * len(counts)).values
 
-        cpts[feature] = table
+    return priors, cpts
 
-    return priors, cpts, value_index
-
-def predict(model, row):
+def predict(model: Model, df: pd.DataFrame) -> pd.Series:
     """Predict using [method]
     """
-    priors, cpts, value_index = model
-    scores = np.log(priors).copy()
+    priors, cpts = model
+    scores = np.log(priors.to_numpy())
     
     for feature in FEATURES:
-        i = value_index[feature][row[feature]]
-        scores += np.log(cpts[feature][i])
+        log_p = np.log(cpts[feature].reindex(df[feature]))
+        scores = scores + log_p.fillna(0).to_numpy()
         
-    return STRESS_VALUES[np.argmax(scores)]
+    stress_pred_idx = np.argmax(scores, axis=1)
+    stress_pred = np.array(STRESS_VALUES)[stress_pred_idx]
+    return pd.Series(stress_pred, index=df.index)
 
-def macro_f1(model, df):
+def macro_f1(model: Model, df: pd.DataFrame) -> float:
     """Calculate multi-class F1 given data + model
     """
-    tp = dict.fromkeys(STRESS_VALUES, 0)
-    fp = dict.fromkeys(STRESS_VALUES, 0)
-    fn = dict.fromkeys(STRESS_VALUES, 0)
+    pred = predict(model, df)
+
+    # generate confusion matrix of predictions vs actuals
+    cm = pd.crosstab(df[TARGET], pred).reindex(
+        index=STRESS_VALUES,
+        columns=STRESS_VALUES,
+        fill_value=0
+    )
     
-    # Count TP, FP, FN for each class
-    for row in df:
-        actual, pred = row[TARGET], predict(model, row)
-        if actual == pred:
-            tp[actual] += 1
-        else:
-            fp[pred] += 1
-            fn[actual] += 1
+    tp = np.diag(cm)
+    fp = cm.sum(axis=0).to_numpy() - tp
+    fn = cm.sum(axis=1).to_numpy() - tp
+    
+    denom = 2 * tp + fp + fn
+    f1 = np.divide(2 * tp, denom, out=np.zeros(len(tp)), where=denom > 0)
+    return f1.mean()
 
-    f1s = [2 * tp[y] / d if (d := 2 * tp[y] + fp[y] + fn[y]) else 0 for y in STRESS_VALUES]
-    return np.mean(f1s)
 
-def tune_alpha(train, val, alphas):
+def tune_alpha(train: pd.DataFrame, val: pd.DataFrame, alphas: Iterable[float]) -> tuple[float, float]:
     """Hyperparameter tuner for Laplace smoothing parameter alpha.
     """
-    results = [(macro_f1(fit(train, alpha), val), alpha) for alpha in alphas]
+    results = []
+    for alpha in alphas:
+        model = fit(train, alpha)
+        f1 = macro_f1(model, val)
+        results.append((f1, alpha))
+
     best_f1, best_alpha = max(results)
     return best_alpha, best_f1
 
-def main():
+def main() -> None:
     """Main data loop
     """
 
@@ -118,10 +124,10 @@ def main():
     print(f"Best alpha: {best_alpha}, Validation F1: {val_f1}")
 
     # Use the best alpha to train the final model
-    final_priors, final_cpts, final_value_index = fit(train_df, best_alpha)
+    final_model = fit(train_df, best_alpha)
 
     # Evaluate on the test set
-    test_f1 = macro_f1((final_priors, final_cpts, final_value_index), test_df)
+    test_f1 = macro_f1(final_model, test_df)
     print(f"Test F1: {test_f1}")
 
 
