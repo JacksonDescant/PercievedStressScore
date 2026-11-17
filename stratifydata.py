@@ -1,3 +1,4 @@
+import warnings
 from collections.abc import Iterable
 
 import numpy as np
@@ -40,7 +41,7 @@ def split_data(path: str = DATA_PATH, seed: int = 42) -> tuple[pd.DataFrame, pd.
     return train_df, val_df, test_df
 
 def fit(data: pd.DataFrame, alpha: float) -> Model:
-    """Uses [method] to determine CPTs. Applies laplace smoothing with alpha.
+    """Fits a Categorical Naive Bayes model: class priors and per-feature CPTs from counts. Applies Laplace smoothing with alpha.
 
     Args:
         data (pd.DataFrame): Training data
@@ -50,7 +51,8 @@ def fit(data: pd.DataFrame, alpha: float) -> Model:
         Model: A tuple containing the priors (pd.Series) and CPTs (dict of feature -> pd.DataFrame).
     """
     
-    # P(Stress = Low/MedLow/MedHigh/High)
+    # P(Stress = stress_val)
+    # NOTE: could move counting to separate function and then adjust method to take counts instead
     class_counts = data[TARGET].value_counts().reindex(STRESS_VALUES, fill_value=0)
     priors = class_counts / class_counts.sum()
     
@@ -63,13 +65,27 @@ def fit(data: pd.DataFrame, alpha: float) -> Model:
     return priors, cpts
 
 def predict(model: Model, df: pd.DataFrame) -> pd.Series:
-    """Predict using [method]
+    """Predict stress class for each row with Categorical Naive Bayes.
+
+    Picks argmax over classes of log P(class) + sum of log P(feature value | class).
+    Feature values unseen in training are skipped (contribute 0), and a warning
+    names the feature, the unseen values, and how many rows were affected.
     """
     priors, cpts = model
     scores = np.log(priors.to_numpy())
-    
+
     for feature in FEATURES:
         log_p = np.log(cpts[feature].reindex(df[feature]))
+
+        unseen = log_p.isna().any(axis=1).to_numpy()
+        if unseen.any():
+            unseen_values = sorted(df.loc[unseen, feature].astype(str).unique())
+            warnings.warn(
+                f"{feature}: {unseen.sum()} row(s) have values unseen in training "
+                f"{unseen_values}; feature skipped for those rows",
+                stacklevel=2,
+            )
+
         scores = scores + log_p.fillna(0).to_numpy()
         
     stress_pred_idx = np.argmax(scores, axis=1)
@@ -120,7 +136,8 @@ def main() -> None:
     print(f"\tValidation: {len(val_df)/data_len*100:.2f}%")
     print(f"\tTesting: {len(test_df)/data_len*100:.2f}%")
     
-    best_alpha, val_f1 = tune_alpha(train_df, val_df, alphas=np.arange(10.0, 17.0, 0.1))
+    # NOTE: /10 to avoid float drift
+    best_alpha, val_f1 = tune_alpha(train_df, val_df, alphas=np.arange(100, 170) / 10)
     print(f"Best alpha: {best_alpha}, Validation F1: {val_f1}")
 
     # Use the best alpha to train the final model
