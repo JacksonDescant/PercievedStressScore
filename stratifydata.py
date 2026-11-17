@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
 
-DATA_PATH = "no_nan_data.csv"
+DATA_PATH = "equal_frequency_data.csv"
 TARGET = "Perceived_Stress_Score"
 FEATURES = ["Age", "Gender", "Academic_Level", "Primary_Platform", "Daily_Usage_Hours", "Device_Type", "Late_Night_Usage"]
 STRESS_VALUES = ["Low", "Medium Low", "Medium High", "High"]
@@ -92,11 +92,9 @@ def predict(model: Model, df: pd.DataFrame) -> pd.Series:
     stress_pred = np.array(STRESS_VALUES)[stress_pred_idx]
     return pd.Series(stress_pred, index=df.index)
 
-def macro_f1(model: Model, df: pd.DataFrame) -> float:
+def macro_f1(df: pd.DataFrame, pred: pd.DataFrame) -> float:
     """Calculate multi-class F1 given data + model
     """
-    pred = predict(model, df)
-
     # generate confusion matrix of predictions vs actuals
     cm = pd.crosstab(df[TARGET], pred).reindex(
         index=STRESS_VALUES,
@@ -112,6 +110,9 @@ def macro_f1(model: Model, df: pd.DataFrame) -> float:
     f1 = np.divide(2 * tp, denom, out=np.zeros(len(tp)), where=denom > 0)
     return f1.mean()
 
+def get_accuracy(df: pd.DataFrame, pred: pd.DataFrame) -> float:
+    """Calculate accuracy"""
+    return sum(df[TARGET] == pred) / len(pred)
 
 def tune_alpha(train: pd.DataFrame, val: pd.DataFrame, alphas: Iterable[float]) -> tuple[float, float]:
     """Hyperparameter tuner for Laplace smoothing parameter alpha.
@@ -119,11 +120,15 @@ def tune_alpha(train: pd.DataFrame, val: pd.DataFrame, alphas: Iterable[float]) 
     results = []
     for alpha in alphas:
         model = fit(train, alpha)
-        f1 = macro_f1(model, val)
-        results.append((f1, alpha))
+        pred = predict(model, val)
+        acc = get_accuracy(val, pred)
+        f1 = macro_f1(val, pred)
+        results.append((f1, alpha, acc))
 
-    best_f1, best_alpha = max(results)
-    return best_alpha, best_f1
+    print(sorted(results))
+
+    best_f1, best_alpha, best_acc = max(results)
+    return best_alpha, best_f1, best_acc
 
 def main() -> None:
     """Main data loop
@@ -137,15 +142,18 @@ def main() -> None:
     print(f"\tTesting: {len(test_df)/data_len*100:.2f}%")
     
     # NOTE: /10 to avoid float drift
-    best_alpha, val_f1 = tune_alpha(train_df, val_df, alphas=np.arange(100, 170) / 10)
-    print(f"Best alpha: {best_alpha}, Validation F1: {val_f1}")
+    best_alpha, val_f1, best_acc = tune_alpha(train_df, val_df, alphas=np.arange(1, 200) /10)
+    print(f"Best alpha: {best_alpha}, Validation F1: {val_f1}, Best Acc: {best_acc}")
 
     # Use the best alpha to train the final model
     final_model = fit(train_df, best_alpha)
 
     # Evaluate on the test set
-    test_f1 = macro_f1(final_model, test_df)
+    pred = predict(final_model, test_df)
+    test_f1 = macro_f1(test_df, pred)
+    test_acc = get_accuracy(test_df, pred)
     print(f"Test F1: {test_f1}")
+    print(f"Test Acc: {test_acc}")
 
 
 if __name__ == "__main__":
