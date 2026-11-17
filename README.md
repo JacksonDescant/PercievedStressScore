@@ -2,6 +2,8 @@
 
 Based on the dataset: <https://www.kaggle.com/datasets/harishyadav0506/impact-of-social-media-on-life>
 
+We predict the `Perceived_Stress_Score`, binned into 4 classes from 7 categorical features using Categorical Naive Bayes.
+
 ## Setup
 
 Requires Python 3.14+.
@@ -18,5 +20,11 @@ pip install -r requirements.txt
 
 ```bash
 uv sync
+```
+
+## Run
+
+```bash
+python stratifydata.py # split, tune, alpha, report F1
 ```
 
