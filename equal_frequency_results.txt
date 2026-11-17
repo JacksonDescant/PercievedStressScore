@@ -1,0 +1,20 @@
+Best alpha: 11.1, Validation F1: 0.43889696462226135
+Test F1: 0.46489329384066225
+
+Training: 69.98%
+        Validation: 15.00%
+        Testing: 15.02%
+
+
+[(np.float64(0.4344057337857816), np.int64(1)), (np.float64(0.43551112260201275), np.int64(2)), (np.float64(0.4365516706487359), np.int64(3)), (np.float64(0.43714820288670164), np.int64(12)), 
+(np.float64(0.43714820288670164), np.int64(13)), (np.float64(0.43731593903384136), np.int64(17)), (np.float64(0.43731593903384136), np.int64(18)), (np.float64(0.43731593903384136), np.int64(19)), 
+(np.float64(0.4376526803515953), np.int64(4)), (np.float64(0.4376526803515953), np.int64(5)), (np.float64(0.4376526803515953), np.int64(6)), (np.float64(0.4388438098235429), np.int64(14)), (np.float64(0.4388438098235429), np.int64(15)), 
+(np.float64(0.4388438098235429), np.int64(16)), (np.float64(0.43889696462226135), np.int64(7)), (np.float64(0.43889696462226135), np.int64(8)), (np.float64(0.43889696462226135), np.int64(9)), (np.float64(0.43889696462226135), np.int64(10)), 
+(np.float64(0.43889696462226135), np.int64(11))]
+
+0.5052316890881914 accuracy
+
+                low -> medium low -> medium high -> high
+True Positives: [119  23  55 141]
+False Positives: [113  54  81  83]
+False Negatives: [ 48 128 124  31]
